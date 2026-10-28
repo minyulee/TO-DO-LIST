@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#ffffff">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="이유민 TO-DO">
@@ -68,10 +69,37 @@ button:disabled{opacity:.3;cursor:default}
 .due{font-size:10px;width:90px}
 .delete-task-btn{font-size:16px}
 }
+
+/* Firebase 로그인 및 동기화 상태 */
+.auth-screen{position:fixed;inset:0;background:#fff;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px}
+.auth-card{width:100%;max-width:360px;border:2px solid #000;padding:25px;border-radius:8px}
+.auth-card h2{margin:0 0 8px;font-size:22px}
+.auth-card p{font-size:13px;line-height:1.6;color:#555}
+.auth-card input{width:100%;padding:12px;margin:6px 0;border:1px solid #aaa;border-radius:5px;font-size:15px}
+.auth-actions{display:flex;gap:8px;margin-top:10px}.auth-actions button{flex:1}
+.auth-error{color:#b00020;font-size:12px;min-height:18px;overflow-wrap:anywhere}
+.sync-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:#555;margin-bottom:12px}
+.sync-bar button{background:#fff;border:1px solid #aaa;border-radius:4px;padding:4px 7px;font-size:11px}
+[hidden]{display:none!important}
 </style>
 </head>
 <body>
-<div class="container">
+<div id="authScreen" class="auth-screen">
+  <div class="auth-card">
+    <h2>TO-DO LIST</h2>
+    <p>윈도우와 아이폰에서 같은 계정으로 로그인하면 할 일이 자동 동기화됩니다.</p>
+    <input id="authEmail" type="email" placeholder="이메일" autocomplete="username">
+    <input id="authPassword" type="password" placeholder="비밀번호 (6자 이상)" autocomplete="current-password">
+    <div class="auth-actions">
+      <button class="btn" id="loginBtn" type="button">로그인</button>
+      <button class="btn-light" id="registerBtn" type="button" style="display:none">처음 가입</button>
+    </div>
+    <p id="authError" class="auth-error" role="alert"></p>
+    <p>Firebase 설정이 완료된 후 사용할 수 있습니다.</p>
+  </div>
+</div>
+<div class="container" id="appContainer">
+  <div class="sync-bar"><span id="syncStatus">● 로그인 대기</span><span><button id="importLocalBtn" type="button" hidden>이 기기의 기존 일정 가져오기</button> <button id="logoutBtn" type="button">로그아웃</button></span></div>
   <div class="top">
     <div class="date" id="dateText"></div>
     <div class="time" id="timeText"></div>
@@ -119,7 +147,7 @@ button:disabled{opacity:.3;cursor:default}
 
   <div class="message" id="message"></div>
   <div class="note">
-    일정은 이 브라우저에 자동 저장됩니다. 정기적으로 백업 파일을 저장해 주세요.
+    일정은 Firebase 클라우드에 자동 저장되고 로그인한 기기 간 동기화됩니다. 백업 파일도 정기적으로 저장해 주세요.
     알림은 웹앱이 열려 있는 동안 확인됩니다.
   </div>
 </div>
@@ -188,6 +216,7 @@ function persist(){
     alert("저장 공간이 부족할 수 있어요. 백업 파일을 저장해 주세요.");
   }
   updateProgress();
+  if(window.cloudSave) window.cloudSave();
 }
 
 function load(){
@@ -585,7 +614,7 @@ document.getElementById("backupFile").addEventListener("change",async e=>{
     openSubtasks.clear();
     persist();
     render();
-    alert("백업 데이터를 복구했어요.");
+    alert("백업 데이터를 복구했어요. 클라우드에도 저장됩니다.");
   }catch(err){
     alert("백업 파일을 읽지 못했어요. 올바른 JSON 파일인지 확인해 주세요.");
   }
@@ -598,6 +627,139 @@ load();
 updateMessage();
 checkDeadlines();
 setInterval(checkDeadlines,15000);
+</script>
+
+<script type="module">
+// 1. Firebase Console > 프로젝트 설정 > 내 앱(웹)에서 제공한 설정값으로 교체하세요.
+const firebaseConfig = {
+  apiKey: "AIzaSyBnFgb8DQS4MOc6Px-SJfqG0XB Yzmc zgJg".replaceAll(" ",""),
+  authDomain: "to-do-list-c4730.firebaseapp.com",
+  databaseURL: "https://to-do-list-c4730-default-rtdb.firebaseio.com",
+  projectId: "to-do-list-c4730",
+  storageBucket: "to-do-list-c4730.firebasestorage.app",
+  messagingSenderId: "678451446941",
+  appId: "1:678451446941:web:420f2c161e0f4d7438c074"
+};
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { getFirestore, doc, onSnapshot, setDoc, getDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+const authScreen=document.getElementById("authScreen");
+const authError=document.getElementById("authError");
+const syncStatus=document.getElementById("syncStatus");
+const importLocalBtn=document.getElementById("importLocalBtn");
+const loginBtn=document.getElementById("loginBtn");
+const registerBtn=document.getElementById("registerBtn");
+const emailInput=document.getElementById("authEmail");
+const passwordInput=document.getElementById("authPassword");
+let auth,store,unsubscribe=null,writeTimer=null,activeUid=null,ready=false,dirty=false,writeQueue=Promise.resolve();
+const localBeforeLogin=JSON.parse(JSON.stringify(db));
+const hasWrittenTasks=(data)=>Object.values(data?.days||{}).some(tasks=>Array.isArray(tasks)&&tasks.some(t=>t.text?.trim()||t.subtasks?.some(x=>x.text?.trim())));
+function status(message){syncStatus.textContent=message;}
+function errorText(e){
+  const code=e?.code||"";
+  const map={"auth/invalid-credential":"이메일 또는 비밀번호가 올바르지 않습니다.","auth/email-already-in-use":"이미 가입된 이메일입니다. 로그인하세요.","auth/weak-password":"비밀번호를 6자 이상 입력하세요.","auth/invalid-email":"올바른 이메일을 입력하세요.","auth/operation-not-allowed":"Firebase에서 이메일/비밀번호 로그인을 활성화하세요.","permission-denied":"Firestore 보안 규칙을 확인하세요."};
+  return map[code]||map[code.replace("firestore/","")]||"오류가 발생했습니다: "+(e?.message||code);
+}
+function queueSave(){
+  if(!ready||!activeUid)return;
+  dirty=true;
+  status("● 저장 중…");
+  clearTimeout(writeTimer);
+  writeTimer=setTimeout(flushSave,550);
+}
+async function flushSave(){
+  if(!ready||!activeUid||!dirty)return;
+  dirty=false;
+  const uid=activeUid;
+  const payload=JSON.parse(JSON.stringify(db));
+  writeQueue=writeQueue.catch(()=>{}).then(async()=>{
+    if(uid!==activeUid)return;
+    await setDoc(doc(store,"users",uid,"todo","main"),{data:payload,updatedAt:serverTimestamp()});
+  });
+  try{await writeQueue;if(uid===activeUid&&!dirty)status("● 클라우드 저장 완료");}
+  catch(e){if(uid===activeUid){dirty=true;status("● 저장 실패 — 인터넷 연결 확인");console.error(e);}}
+}
+function applyRemote(data){
+  if(!data||!data.days||typeof data.days!=="object")return;
+  db={version:4,days:data.days};
+  try{localStorage.setItem(STORAGE_KEY,JSON.stringify(db));}catch(e){}
+  render();
+}
+async function startSession(user){
+  activeUid=user.uid;
+  ready=false;dirty=false;window.cloudSave=null;
+  if(unsubscribe){unsubscribe();unsubscribe=null;}
+  clearTimeout(writeTimer);
+  authScreen.hidden=true;
+  status("● 클라우드 연결 중…");
+  const ref=doc(store,"users",user.uid,"todo","main");
+  try{
+    const snap=await getDoc(ref);
+    if(activeUid!==user.uid)return;
+    if(snap.exists()){
+      applyRemote(snap.data().data);
+      importLocalBtn.hidden=!hasWrittenTasks(localBeforeLogin);
+    }else{
+      // 첫 로그인: 현재 기기에 기존 일정이 있으면 초기 클라우드 데이터로 이전
+      const initial=hasWrittenTasks(localBeforeLogin)?localBeforeLogin:{version:4,days:{}};
+      applyRemote(initial);
+      await setDoc(ref,{data:initial,updatedAt:serverTimestamp()});
+      importLocalBtn.hidden=true;
+    }
+    if(activeUid!==user.uid)return;
+    ready=true;
+    window.cloudSave=queueSave;
+    unsubscribe=onSnapshot(ref,snapshot=>{
+      if(!snapshot.exists()||snapshot.metadata.hasPendingWrites||dirty)return;
+      applyRemote(snapshot.data().data);
+      status("● 실시간 동기화 연결됨");
+    },e=>{status("● 동기화 오류");console.error(e);});
+    status("● 실시간 동기화 연결됨");
+  }catch(e){status("● 연결 실패");authError.textContent=errorText(e);authScreen.hidden=false;console.error(e);}
+}
+function stopSession(){
+  clearTimeout(writeTimer);
+  if(unsubscribe){unsubscribe();unsubscribe=null;}
+  ready=false;dirty=false;activeUid=null;window.cloudSave=null;
+  db={version:4,days:{}};
+  render();
+  authScreen.hidden=false;
+  importLocalBtn.hidden=true;
+  status("● 로그인 대기");
+}
+async function authAction(register){
+  authError.textContent="";
+  const email=emailInput.value.trim();const password=passwordInput.value;
+  if(!email||!password){authError.textContent="이메일과 비밀번호를 입력하세요.";return;}
+  loginBtn.disabled=registerBtn.disabled=true;
+  try{
+    if(register)await createUserWithEmailAndPassword(auth,email,password);
+    else await signInWithEmailAndPassword(auth,email,password);
+  }catch(e){authError.textContent=errorText(e);}
+  finally{loginBtn.disabled=registerBtn.disabled=false;}
+}
+loginBtn.addEventListener("click",()=>authAction(false));
+registerBtn.addEventListener("click",()=>authAction(true));
+passwordInput.addEventListener("keydown",e=>{if(e.key==="Enter")authAction(false);});
+document.getElementById("logoutBtn").addEventListener("click",async()=>{
+  if(dirty)await flushSave();
+  try{await signOut(auth);}catch(e){alert(errorText(e));}
+});
+importLocalBtn.addEventListener("click",()=>{
+  if(!confirm("이 기기에 원래 저장되어 있던 일정으로 클라우드 일정을 덮어쓸까요? 다른 기기의 일정이 교체됩니다."))return;
+  applyRemote(localBeforeLogin);
+  queueSave();
+  importLocalBtn.hidden=true;
+});
+try{
+  if(firebaseConfig.apiKey==="YOUR_API_KEY")throw new Error("HTML 파일의 firebaseConfig를 Firebase 프로젝트 설정값으로 바꿔 주세요.");
+  const app=initializeApp(firebaseConfig);
+  auth=getAuth(app);store=getFirestore(app);
+  await setPersistence(auth,browserLocalPersistence);
+  onAuthStateChanged(auth,user=>{if(user)startSession(user);else stopSession();});
+}catch(e){authError.textContent=e.message;console.error(e);}
 </script>
 </body>
 </html>
